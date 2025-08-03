@@ -26,7 +26,6 @@ type GetResponse struct {
 }
 
 var db = make(map[string]PostRequest) // using this as in-memory database
-var c = colly.NewCollector()
 
 func main() {
 	fmt.Println("Hello, world!")
@@ -74,13 +73,15 @@ func getProduct(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Product not found", http.StatusNotFound)
 		return
 	}
-
+	c := colly.NewCollector(colly.Async(true))
 	var res GetResponse
-	done := make(chan bool) // channel to signale completion of scraping
+	done := make(chan struct{}) // channel to signale completion of scraping
 
 	// capturing price
-	c.OnHTML("div._30jeq3._16Jk6d", func(e *colly.HTMLElement) {
+	c.OnHTML("div.Nx9bqj", func(e *colly.HTMLElement) {
+		fmt.Println(res.FlipkartPrice)
 		if res.FlipkartPrice == "" { // using this condition it returns two different prices
+
 			res.FlipkartPrice = e.Text
 			fmt.Println("Flipkart Price:", res.FlipkartPrice)
 		}
@@ -98,18 +99,32 @@ func getProduct(w http.ResponseWriter, r *http.Request) {
 	})
 
 	c.OnScraped(func(r *colly.Response) {
-		done <- true
+		done <- struct{}{}
+	})
+	c.OnError(func(r *colly.Response, err error) {
+		fmt.Println("Error:", err)
+		http.Error(w, "Failed to scrape product", http.StatusInternalServerError)
+
 	})
 
-	err := c.Visit(product.ProductUrl)
-	if err != nil {
-		http.Error(w, "Failed to visit product URL", http.StatusInternalServerError)
+	// err := c.Visit(product.ProductUrl)
+	// if err != nil {
+	// 	http.Error(w, "Failed to visit product URL", http.StatusInternalServerError)
+	// 	return
+	// }
+	go func() {
+		_ = c.Visit(product.ProductUrl)
+		c.Wait()
+	}()
+
+	select {
+	case <-done:
+
+	case <-time.After(time.Second * 15):
+		http.Error(w, "Timeout", http.StatusInternalServerError)
 		return
 	}
-
-	// waiting for scraping to complete
-	<-done
-
+	res.WowDealPrice = product.WowDealPrice
 	numPrice1, err1 := cleanPrice(res.FlipkartPrice)
 	numPrice2, err2 := cleanPrice(product.WowDealPrice)
 
